@@ -1,0 +1,18 @@
+- Inputs: Binarized 28x28 MNIST (i.e. 784 pixels). It will probably be helpful to search online for how
+ people usually make a binary version of MNIST. Reserve 10k images to be used as a validation set from 
+ the 60k images of the MNIST training set, leaving 50k images for the training set. Minibatch size 128.
+
+- All weights 64-bit full precision.
+
+- Hidden Layer 1: 2048 units, each receiving from all 784 pixels, 64-bit full precision sigmoidal activation 
+function.
+
+- Hidden Layer 2: 1024 units, each receiving from all 2048 units of Hidden Layer 1, 64-bit full precision 
+sigmoidal activation function.
+
+- Output Layer: 10 units, each receiving from all 1024 units of Hidden Layer 2, 64-bit full precision softmax 
+activation function.
+
+Train the network in the usual manner and using categorical crossentropy loss, Adam optimizer, Xavier initialization, 
+learning rate 0.001. Feel free to try different things and/or suggest alternatives that you think might work better. 
+Report training accuracy, training loss, validation accuracy and validation loss
