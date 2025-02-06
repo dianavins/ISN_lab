@@ -14,7 +14,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import itertools
 
-dtype = torch.float64
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
 torch.set_default_dtype(torch.float64)
 
@@ -24,28 +23,26 @@ class Binarize:
         self.threshold = threshold
     
     def __call__(self, x):
-        return (x > self.threshold).to(dtype=dtype)
+        return (x > self.threshold).to(dtype=torch.float64)
     
 transform = transforms.Compose([
-            transforms.Resize((28, 28)),
-            transforms.Grayscale(),
             transforms.ToTensor(),
             Binarize(threshold=0.5),
-            transforms.Normalize((0,), (1,))])
+])
 
-mnist_train = datasets.MNIST('./tmp_mnist', train=True, download=True, transform=transform)
-mnist_test = datasets.MNIST('./tmp_mnist', train=False, download=True, transform=transform)
+train_dataset = datasets.MNIST('./tmp_mnist', train=True, download=True, transform=transform)
+test_dataset = datasets.MNIST('./tmp_mnist', train=False, download=True, transform=transform)
 
 # Split training data into train and validation sets
 train_size = 50000
 val_size = 10000
-train_dataset, val_dataset = random_split(mnist_train, [train_size, val_size])
+train_dataset, val_dataset = random_split(train_dataset, [train_size, val_size])
 
 # dataloader arguments
 batch_size = 128
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-test_loader = DataLoader(mnist_test, batch_size=batch_size, shuffle=False)
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
 
 # Temporal Dynamics
@@ -58,7 +55,7 @@ class Net(nn.Module):
         super().__init__()
 
         # Convert all parameters to float64
-        self.to(dtype=dtype)
+        self
         
         # Initialize layers
         self.fc1 = nn.Linear(784, 2048)
@@ -77,13 +74,10 @@ class Net(nn.Module):
 
     def forward(self, x):
 
-        x = x.to(dtype=dtype)
-
-
         # Initialize hidden states at t=0
-        mem1 = self.lif1.init_leaky().to(dtype=dtype)
-        mem2 = self.lif2.init_leaky().to(dtype=dtype)
-        mem3 = self.lif3.init_leaky().to(dtype=dtype)
+        mem1 = self.lif1.init_leaky()
+        mem2 = self.lif2.init_leaky()
+        mem3 = self.lif3.init_leaky()
 
         # Record the final layer
         spk3_rec = []
@@ -92,13 +86,13 @@ class Net(nn.Module):
         for step in range(num_steps):
             cur1 = self.fc1(x)
             spk1, mem1 = self.lif1(cur1, mem1)
-            spk1 = spk1.to(dtype=dtype)
+            spk1 = spk1.to(dtype=torch.float64)
             cur2 = self.fc2(spk1)
             spk2, mem2 = self.lif2(cur2, mem2)
-            spk2 = spk2.to(dtype=dtype)
+            spk2 = spk2.to(dtype=torch.float64)
             cur3 = self.fc3(spk2)
             spk3, mem3 = self.lif1(cur3, mem3)
-            spk3 = spk3.to(dtype=dtype)
+            spk3 = spk3.to(dtype=torch.float64)
             spk3_rec.append(spk3)
             mem3_rec.append(mem3)
 
@@ -110,8 +104,6 @@ net = Net().to(device)
 # loss and optimizer
 loss = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(net.parameters(), lr=5e-4, betas=(0.9, 0.999))
-for param_group in optimizer.param_groups:
-    param_group['params'] = [p.to(dtype=dtype) for p in param_group['params']]
 
 # pass data into the network, sum the spikes over time
 # and compare the neuron with the highest number of spikes
@@ -207,7 +199,7 @@ total = 0
 correct = 0
 
 # drop_last switched to False to keep all samples
-test_loader = DataLoader(mnist_test, batch_size=batch_size, shuffle=True, drop_last=False)
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, drop_last=False)
 
 with torch.no_grad():
   net.eval()

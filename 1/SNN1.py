@@ -105,11 +105,11 @@ model = SpikingNN(
 model = model.double()
 
 # Define loss function and optimizer
-criterion = nn.CrossEntropyLoss()
+loss = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 
 # Training function
-def train_epoch(model, loader, optimizer, criterion):
+def train_epoch(model, loader, optimizer, loss):
     model.train()
     total_loss = 0
     correct = 0
@@ -121,7 +121,7 @@ def train_epoch(model, loader, optimizer, criterion):
         
         optimizer.zero_grad()
         outputs = model(inputs)
-        loss = criterion(outputs, targets)
+        loss = loss(outputs, targets)
         
         loss.backward()
         optimizer.step()
@@ -134,7 +134,7 @@ def train_epoch(model, loader, optimizer, criterion):
     return total_loss / len(loader), 100. * correct / total
 
 # Validation function
-def validate(model, loader, criterion):
+def validate(model, loader, loss):
     model.eval()
     total_loss = 0
     correct = 0
@@ -146,7 +146,7 @@ def validate(model, loader, criterion):
             targets = targets.to(device)
             
             outputs = model(inputs)
-            loss = criterion(outputs, targets)
+            loss = loss(outputs, targets)
             
             total_loss += loss.item()
             _, predicted = outputs.max(1)
@@ -161,8 +161,8 @@ num_epochs = 10
 best_val_acc = 0
 
 for epoch in range(num_epochs):
-    train_loss, train_acc = train_epoch(model, train_loader, optimizer, criterion)
-    val_loss, val_acc = validate(model, val_loader, criterion)
+    train_loss, train_acc = train_epoch(model, train_loader, optimizer, loss)
+    val_loss, val_acc = validate(model, val_loader, loss)
     
     print(f'Epoch: {epoch+1}/{num_epochs}')
     print(f'Training Loss: {train_loss:.4f}, Training Accuracy: {train_acc:.2f}%')
