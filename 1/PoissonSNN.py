@@ -250,7 +250,7 @@ with torch.no_grad():
     targets = targets.to(device)
 
     # forward pass
-    test_spk, _ = net(data.view(data.size(0), -1))
+    test_spk, _ = net(data)
 
     # calculate total accuracy
     _, predicted = test_spk.sum(dim=0).max(1)
