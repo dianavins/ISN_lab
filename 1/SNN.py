@@ -12,18 +12,17 @@ torch.manual_seed(42)
 
 # Check if CUDA is available
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"Using device: {device}")
 
 # Set default tensor type to float64
-torch.set_default_tensor_type(torch.DoubleTensor)
+torch.set_default_dtype(torch.float64)
 
-# Define binarization transform
+# Define binarization transform: converts continuous values to binary values based on a threshold.
 class Binarize(object):
     def __init__(self, threshold=0.5):
         self.threshold = threshold
     
     def __call__(self, x):
-        return (x > self.threshold).double()  # Convert to double
+        return (x > self.threshold).to(dtype=torch.float64)  # Convert to double
 
 # Data loading and preprocessing
 transform = transforms.Compose([
@@ -48,17 +47,14 @@ test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
 # Define the SNN model
 class SpikingNN(nn.Module):
-    def __init__(self, input_size, hidden1_size, hidden2_size, output_size, beta=0.95):
+    def __init__(self, beta=0.95):
         super().__init__()
         
-        # Convert all parameters to float64 (64-bit precision)
-        self.fc1 = nn.Linear(input_size, hidden1_size)
-        self.lif1 = snn.Leaky(beta=beta) # neuron.LIFNode(tau=tau, surrogate_function=surrogate.ATan())neuron.LIFNode(tau=tau, surrogate_function=surrogate.ATan())
-        
-        self.fc2 = nn.Linear(hidden1_size, hidden2_size)
+        self.fc1 = nn.Linear(784, 2048)
+        self.lif1 = snn.Leaky(beta=beta)
+        self.fc2 = nn.Linear(2048, 1024)
         self.lif2 = snn.Leaky(beta=beta)
-        
-        self.fc3 = nn.Linear(hidden2_size, output_size)
+        self.fc3 = nn.Linear(1024, 10)
         self.lif3 = snn.Leaky(beta=beta)
         
         # Xavier initialization
@@ -90,19 +86,11 @@ class SpikingNN(nn.Module):
         cur3 = self.fc3(spk2)
         spk3, mem3 = self.lif3(cur3, mem3)
         
-        return torch.softmax(mem3, dim=1)
+        return torch.softmax(spk3, dim=1)
 
 # Initialize model
-print("Initializing model...")
-model = SpikingNN(
-    input_size=784,  # 28x28 pixels
-    hidden1_size=2048,
-    hidden2_size=1024,
-    output_size=10
-).to(device)
-
-# Ensure model is in double precision
-model = model.double()
+model = SpikingNN().to(device)
+model.to(torch.float64)
 
 # Define loss function and optimizer
 loss = nn.CrossEntropyLoss()
@@ -110,6 +98,20 @@ optimizer = optim.Adam(model.parameters(), lr=0.001)
 
 # Training function
 def train_epoch(model, loader, optimizer, loss):
+    """
+    Train the model for one epoch.
+    
+    Args:
+        model (nn.Module): Neural network model to train
+        loader (DataLoader): DataLoader containing the training data
+        optimizer (torch.optim.Optimizer): Optimizer for updating model parameters
+        loss (callable): Loss function
+        
+    Returns:
+        tuple: (average_loss, accuracy)
+            - average_loss (float): Average loss per batch for the epoch
+            - accuracy (float): Training accuracy as a percentage
+    """
     model.train()
     total_loss = 0
     correct = 0
@@ -121,12 +123,12 @@ def train_epoch(model, loader, optimizer, loss):
         
         optimizer.zero_grad()
         outputs = model(inputs)
-        loss = loss(outputs, targets)
+        batch_loss = loss(outputs, targets)
         
-        loss.backward()
+        batch_loss.backward()
         optimizer.step()
         
-        total_loss += loss.item()
+        total_loss += batch_loss.item()
         _, predicted = outputs.max(1)
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
@@ -135,6 +137,19 @@ def train_epoch(model, loader, optimizer, loss):
 
 # Validation function
 def validate(model, loader, loss):
+    """
+    Validate the model on a validation set.
+    
+    Args:
+        model (nn.Module): Neural network model to validate
+        loader (DataLoader): DataLoader containing the validation data
+        loss (callable): Loss function
+        
+    Returns:
+        tuple: (average_loss, accuracy)
+            - average_loss (float): Average loss per batch for validation set
+            - accuracy (float): Validation accuracy as a percentage
+    """
     model.eval()
     total_loss = 0
     correct = 0
@@ -146,9 +161,9 @@ def validate(model, loader, loss):
             targets = targets.to(device)
             
             outputs = model(inputs)
-            loss = loss(outputs, targets)
+            batch_loss = loss(outputs, targets)
             
-            total_loss += loss.item()
+            total_loss += batch_loss.item()
             _, predicted = outputs.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
@@ -156,7 +171,6 @@ def validate(model, loader, loss):
     return total_loss / len(loader), 100. * correct / total
 
 # Training loop
-print("Starting training...")
 num_epochs = 10
 best_val_acc = 0
 
@@ -169,8 +183,43 @@ for epoch in range(num_epochs):
     print(f'Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_acc:.2f}%')
     print('-' * 60)
     
-    if val_acc > best_val_acc:
-        best_val_acc = val_acc
-        torch.save(model.state_dict(), 'best_snn_model.pth')
+# Testing function
+def test(model, loader, loss):
+    """
+    Evaluate the model on a test set.
+    
+    Args:
+        model (nn.Module): Neural network model to test
+        loader (DataLoader): DataLoader containing the test data
+        loss (callable): Loss function
+        
+    Returns:
+        tuple: (average_loss, accuracy)
+            - average_loss (float): Average loss per batch for test set
+            - accuracy (float): Test accuracy as a percentage
+    """
+    model.eval()
+    total_loss = 0
+    correct = 0
+    total = 0
+    
+    with torch.no_grad():
+        for inputs, targets in tqdm(loader, desc="Testing"):
+            inputs = inputs.view(-1, 784).to(device).double()
+            targets = targets.to(device)
+            
+            outputs = model(inputs)
+            batch_loss = loss(outputs, targets)
+            
+            total_loss += batch_loss.item()
+            _, predicted = outputs.max(1)
+            total += targets.size(0)
+            correct += predicted.eq(targets).sum().item()
+    
+    return total_loss / len(loader), 100. * correct / total
 
-print(f'Best Validation Accuracy: {best_val_acc:.2f}%')
+# Testing the model after training
+model.load_state_dict(torch.load('best_snn_model.pth'))
+test_loss, test_acc = test(model, test_loader, loss)
+
+print(f'Test Loss: {test_loss:.4f}, Test Accuracy: {test_acc:.2f}%')

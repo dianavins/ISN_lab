@@ -1,5 +1,3 @@
-# https://snntorch.readthedocs.io/en/latest/tutorials/tutorial_5.html
-
 # imports
 import snntorch as snn
 from snntorch import spikeplot as splt
@@ -17,7 +15,7 @@ import itertools
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
 torch.set_default_dtype(torch.float64)
 
-# Define a transform
+# Binarze transform converts continuous values to binary values based on a threshold.
 class Binarize:
     def __init__(self, threshold=0.5):
         self.threshold = threshold
@@ -30,8 +28,8 @@ transform = transforms.Compose([
             Binarize(threshold=0.5),
 ])
 
-train_dataset = datasets.MNIST('./tmp_mnist', train=True, download=True, transform=transform)
-test_dataset = datasets.MNIST('./tmp_mnist', train=False, download=True, transform=transform)
+train_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
+test_dataset = datasets.MNIST('./data', train=False, download=True, transform=transform)
 
 # Split training data into train and validation sets
 train_size = 50000
@@ -44,18 +42,11 @@ train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-
-# Temporal Dynamics
-num_steps = 25
-beta = 0.95
-
-# Define Network
-class Net(nn.Module):
-    def __init__(self):
+# Define SpikingNNwork
+class SpikingNN(nn.Module):
+    def __init__(self, beta=0.95):
+        
         super().__init__()
-
-        # Convert all parameters to float64
-        self
         
         # Initialize layers
         self.fc1 = nn.Linear(784, 2048)
@@ -91,7 +82,7 @@ class Net(nn.Module):
             spk2, mem2 = self.lif2(cur2, mem2)
             spk2 = spk2.to(dtype=torch.float64)
             cur3 = self.fc3(spk2)
-            spk3, mem3 = self.lif1(cur3, mem3)
+            spk3, mem3 = self.lif3(cur3, mem3)
             spk3 = spk3.to(dtype=torch.float64)
             spk3_rec.append(spk3)
             mem3_rec.append(mem3)
@@ -99,7 +90,7 @@ class Net(nn.Module):
         return torch.stack(spk3_rec, dim=0), torch.stack(mem3_rec, dim=0)
 
 # Load the network onto CUDA if available
-net = Net().to(device)
+net = SpikingNN().to(device)
 
 # loss and optimizer
 loss = nn.CrossEntropyLoss()
@@ -110,6 +101,17 @@ optimizer = torch.optim.Adam(net.parameters(), lr=5e-4, betas=(0.9, 0.999))
 # with the target
 
 def print_batch_accuracy(data, targets, train=False):
+    """
+    Calculate and print the accuracy for a single minibatch.
+    
+    Args:
+        data (Tensor): Input data batch
+        targets (Tensor): Target labels
+        train (bool): Flag indicating if this is training data (default: False)
+    
+    Returns:
+        None
+    """
     output, _ = net(data.view(batch_size, -1))
     _, idx = output.sum(dim=0).max(1)
     acc = np.mean((targets == idx).detach().cpu().numpy())
@@ -120,6 +122,15 @@ def print_batch_accuracy(data, targets, train=False):
         print(f"Test set accuracy for a single minibatch: {acc*100:.2f}%")
 
 def train_printer():
+    """
+    Print training progress information including loss and accuracy metrics.
+    
+    Prints current epoch, iteration, train/test loss, and batch accuracy for both
+    training and test sets.
+    
+    Returns:
+        None
+    """
     print(f"Epoch {epoch}, Iteration {iter_counter}")
     print(f"Train Set Loss: {loss_hist[counter]:.2f}")
     print(f"Test Set Loss: {test_loss_hist[counter]:.2f}")
@@ -133,6 +144,7 @@ num_epochs = 10
 loss_hist = []
 test_loss_hist = []
 counter = 0
+num_steps = 25
 
 # Outer training loop
 for epoch in range(num_epochs):
