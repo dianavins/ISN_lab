@@ -1,0 +1,1 @@
+PyTorch SNN for MNIST working around basic chip constraints
