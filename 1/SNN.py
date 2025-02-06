@@ -1,55 +1,54 @@
+# imports
+import snntorch as snn
+from snntorch import spikeplot as splt
+from snntorch import spikegen
+
 import torch
 import torch.nn as nn
-import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
-import snntorch as snn
 from torchvision import datasets, transforms
+
+import matplotlib.pyplot as plt
 import numpy as np
-from tqdm import tqdm
+import itertools
 
-# Set random seed for reproducibility
-torch.manual_seed(42)
-
-# Check if CUDA is available
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-# Set default tensor type to float64
+device = torch.device("cuda") if torch.cuda.is_available() else torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
 torch.set_default_dtype(torch.float64)
 
-# Define binarization transform: converts continuous values to binary values based on a threshold.
-class Binarize(object):
+# Binarze transform converts continuous values to binary values based on a threshold.
+class Binarize:
     def __init__(self, threshold=0.5):
         self.threshold = threshold
     
     def __call__(self, x):
-        return (x > self.threshold).to(dtype=torch.float64)  # Convert to double
-
-# Data loading and preprocessing
+        return (x > self.threshold).to(dtype=torch.float64)
+    
 transform = transforms.Compose([
-    transforms.ToTensor(),
-    Binarize(threshold=0.5)
+            transforms.ToTensor(),
+            Binarize(threshold=0.5),
 ])
 
-# Load MNIST dataset
-train_dataset = datasets.MNIST(root='./data', train=True, download=True, transform=transform)
-test_dataset = datasets.MNIST(root='./data', train=False, download=True, transform=transform)
+train_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
+test_dataset = datasets.MNIST('./data', train=False, download=True, transform=transform)
 
 # Split training data into train and validation sets
 train_size = 50000
 val_size = 10000
 train_dataset, val_dataset = random_split(train_dataset, [train_size, val_size])
 
-# Create data loaders
+# dataloader arguments
 batch_size = 128
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-# Define the SNN model
+# Define SpikingNNwork
 class SpikingNN(nn.Module):
     def __init__(self, beta=0.95):
+        
         super().__init__()
         
+        # Initialize layers
         self.fc1 = nn.Linear(784, 2048)
         self.lif1 = snn.Leaky(beta=beta)
         self.fc2 = nn.Linear(2048, 1024)
@@ -62,164 +61,174 @@ class SpikingNN(nn.Module):
         nn.init.xavier_uniform_(self.fc2.weight)
         nn.init.xavier_uniform_(self.fc3.weight)
         
-        # Convert all parameters to float64
-        self.double()
         
+
     def forward(self, x):
-        # Ensure input is double precision
-        x = x.double()
-        
-        # Initialize hidden states with double precision
-        mem1 = self.lif1.init_leaky().double()
-        mem2 = self.lif2.init_leaky().double()
-        mem3 = self.lif3.init_leaky().double()
-        
-        # Forward pass
-        cur1 = self.fc1(x)
-        spk1, mem1 = self.lif1(cur1, mem1)
-        spk1 = spk1.double()  # Ensure double precision
-        
-        cur2 = self.fc2(spk1)
-        spk2, mem2 = self.lif2(cur2, mem2)
-        spk2 = spk2.double()  # Ensure double precision
-        
-        cur3 = self.fc3(spk2)
-        spk3, mem3 = self.lif3(cur3, mem3)
-        
-        return torch.softmax(spk3, dim=1)
 
-# Initialize model
-model = SpikingNN().to(device)
-model.to(torch.float64)
+        # Initialize hidden states at t=0
+        mem1 = self.lif1.init_leaky()
+        mem2 = self.lif2.init_leaky()
+        mem3 = self.lif3.init_leaky()
 
-# Define loss function and optimizer
+        # Record the final layer
+        spk3_rec = []
+        mem3_rec = []
+
+        for step in range(num_steps):
+            cur1 = self.fc1(x)
+            spk1, mem1 = self.lif1(cur1, mem1)
+            spk1 = spk1.to(dtype=torch.float64)
+            cur2 = self.fc2(spk1)
+            spk2, mem2 = self.lif2(cur2, mem2)
+            spk2 = spk2.to(dtype=torch.float64)
+            cur3 = self.fc3(spk2)
+            spk3, mem3 = self.lif3(cur3, mem3)
+            spk3 = spk3.to(dtype=torch.float64)
+            spk3_rec.append(spk3)
+            mem3_rec.append(mem3)
+
+        return torch.stack(spk3_rec, dim=0), torch.stack(mem3_rec, dim=0)
+
+# Load the network onto CUDA if available
+net = SpikingNN().to(device)
+
+# loss and optimizer
 loss = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+optimizer = torch.optim.Adam(net.parameters(), lr=5e-4, betas=(0.9, 0.999))
 
-# Training function
-def train_epoch(model, loader, optimizer, loss):
+# pass data into the network, sum the spikes over time
+# and compare the neuron with the highest number of spikes
+# with the target
+
+def print_batch_accuracy(data, targets, train=False):
     """
-    Train the model for one epoch.
+    Calculate and print the accuracy for a single minibatch.
     
     Args:
-        model (nn.Module): Neural network model to train
-        loader (DataLoader): DataLoader containing the training data
-        optimizer (torch.optim.Optimizer): Optimizer for updating model parameters
-        loss (callable): Loss function
-        
+        data (Tensor): Input data batch
+        targets (Tensor): Target labels
+        train (bool): Flag indicating if this is training data (default: False)
+    
     Returns:
-        tuple: (average_loss, accuracy)
-            - average_loss (float): Average loss per batch for the epoch
-            - accuracy (float): Training accuracy as a percentage
+        None
     """
-    model.train()
-    total_loss = 0
-    correct = 0
-    total = 0
-    
-    for inputs, targets in tqdm(loader, desc="Training"):
-        inputs = inputs.view(-1, 784).to(device).double()
-        targets = targets.to(device)
-        
-        optimizer.zero_grad()
-        outputs = model(inputs)
-        batch_loss = loss(outputs, targets)
-        
-        batch_loss.backward()
-        optimizer.step()
-        
-        total_loss += batch_loss.item()
-        _, predicted = outputs.max(1)
-        total += targets.size(0)
-        correct += predicted.eq(targets).sum().item()
-    
-    return total_loss / len(loader), 100. * correct / total
+    output, _ = net(data.view(batch_size, -1))
+    _, idx = output.sum(dim=0).max(1)
+    acc = np.mean((targets == idx).detach().cpu().numpy())
 
-# Validation function
-def validate(model, loader, loss):
+    if train:
+        print(f"Train set accuracy for a single minibatch: {acc*100:.2f}%")
+    else:
+        print(f"Test set accuracy for a single minibatch: {acc*100:.2f}%")
+
+def train_printer():
     """
-    Validate the model on a validation set.
+    Print training progress information including loss and accuracy metrics.
     
-    Args:
-        model (nn.Module): Neural network model to validate
-        loader (DataLoader): DataLoader containing the validation data
-        loss (callable): Loss function
-        
+    Prints current epoch, iteration, train/test loss, and batch accuracy for both
+    training and test sets.
+    
     Returns:
-        tuple: (average_loss, accuracy)
-            - average_loss (float): Average loss per batch for validation set
-            - accuracy (float): Validation accuracy as a percentage
+        None
     """
-    model.eval()
-    total_loss = 0
-    correct = 0
-    total = 0
+    print(f"Epoch {epoch}, Iteration {iter_counter}")
+    print(f"Train Set Loss: {loss_hist[counter]:.2f}")
+    print(f"Test Set Loss: {test_loss_hist[counter]:.2f}")
+    print_batch_accuracy(data, targets, train=True)
+    print_batch_accuracy(test_data, test_targets, train=False)
+    print("\n")
     
-    with torch.no_grad():
-        for inputs, targets in tqdm(loader, desc="Validating"):
-            inputs = inputs.view(-1, 784).to(device).double()
-            targets = targets.to(device)
-            
-            outputs = model(inputs)
-            batch_loss = loss(outputs, targets)
-            
-            total_loss += batch_loss.item()
-            _, predicted = outputs.max(1)
-            total += targets.size(0)
-            correct += predicted.eq(targets).sum().item()
-    
-    return total_loss / len(loader), 100. * correct / total
 
-# Training loop
-num_epochs = 10
-best_val_acc = 0
+# Training Loop
+num_epochs = 1
+loss_hist = []
+test_loss_hist = []
+counter = 0
+num_steps = 25
 
+# Outer training loop
 for epoch in range(num_epochs):
-    train_loss, train_acc = train_epoch(model, train_loader, optimizer, loss)
-    val_loss, val_acc = validate(model, val_loader, loss)
-    
-    print(f'Epoch: {epoch+1}/{num_epochs}')
-    print(f'Training Loss: {train_loss:.4f}, Training Accuracy: {train_acc:.2f}%')
-    print(f'Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_acc:.2f}%')
-    print('-' * 60)
-    
-# Testing function
-def test(model, loader, loss):
-    """
-    Evaluate the model on a test set.
-    
-    Args:
-        model (nn.Module): Neural network model to test
-        loader (DataLoader): DataLoader containing the test data
-        loss (callable): Loss function
-        
-    Returns:
-        tuple: (average_loss, accuracy)
-            - average_loss (float): Average loss per batch for test set
-            - accuracy (float): Test accuracy as a percentage
-    """
-    model.eval()
-    total_loss = 0
-    correct = 0
-    total = 0
-    
-    with torch.no_grad():
-        for inputs, targets in tqdm(loader, desc="Testing"):
-            inputs = inputs.view(-1, 784).to(device).double()
-            targets = targets.to(device)
-            
-            outputs = model(inputs)
-            batch_loss = loss(outputs, targets)
-            
-            total_loss += batch_loss.item()
-            _, predicted = outputs.max(1)
-            total += targets.size(0)
-            correct += predicted.eq(targets).sum().item()
-    
-    return total_loss / len(loader), 100. * correct / total
+    iter_counter = 0
+    train_batch = iter(train_loader)
 
-# Testing the model after training
-model.load_state_dict(torch.load('best_snn_model.pth'))
-test_loss, test_acc = test(model, test_loader, loss)
+    # Minibatch training loop
+    for data, targets in train_batch:
+        data = data.view(-1, 784).to(device)
+        targets = targets.to(device)
 
-print(f'Test Loss: {test_loss:.4f}, Test Accuracy: {test_acc:.2f}%')
+        # forward pass
+        net.train()
+        spk_rec, mem_rec = net(data)
+
+        # initialize the loss & sum over time
+        loss_val = torch.zeros((1), device=device)
+        for step in range(num_steps):
+            loss_val += loss(mem_rec[step], targets)
+
+        # Gradient calculation + weight update
+        optimizer.zero_grad()
+        loss_val.backward()
+        optimizer.step()
+
+        # Store loss history for future plotting
+        loss_hist.append(loss_val.item())
+
+        # Test set
+        with torch.no_grad():
+            net.eval()
+            test_data, test_targets = next(iter(test_loader))
+            test_data = test_data.to(device)
+            test_targets = test_targets.to(device)
+
+            # Test set forward pass
+            test_spk, test_mem = net(test_data.view(batch_size, -1))
+
+            # Test set loss
+            test_loss = torch.zeros((1), device=device)
+            for step in range(num_steps):
+                test_loss += loss(test_mem[step], test_targets)
+            test_loss_hist.append(test_loss.item())
+
+            # Print train/test loss/accuracy
+            if counter % 50 == 0:
+                train_printer()
+            counter += 1
+            iter_counter +=1
+            
+# Plot Loss
+fig = plt.figure(facecolor="w", figsize=(10, 5))
+plt.plot(loss_hist)
+plt.plot(test_loss_hist)
+plt.title("Loss Curves")
+plt.legend(["Train Loss", "Test Loss"])
+plt.xlabel("Iteration")
+plt.ylabel("Loss")
+plt.show()
+
+
+# Test Evaluation
+total = 0
+correct = 0
+
+# drop_last switched to False to keep all samples
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, drop_last=False)
+
+with torch.no_grad():
+  net.eval()
+  for data, targets in test_loader:
+    data = data.to(device)
+    targets = targets.to(device)
+
+    # forward pass
+    test_spk, _ = net(data.view(data.size(0), -1))
+
+    # calculate total accuracy
+    _, predicted = test_spk.sum(dim=0).max(1)
+    total += targets.size(0)
+    correct += (predicted == targets).sum().item()
+    
+# final test accuracy and loss
+test_acc = 100 * correct / total
+loss = loss_hist[-1]
+print(f"Final Test Accuracy: {test_acc:.2f}%")
+print(f"Final Test Loss: {loss:.2f}")

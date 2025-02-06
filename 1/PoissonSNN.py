@@ -173,7 +173,7 @@ def train_printer():
     
 
 # Training Loop
-num_epochs = 10
+num_epochs = 1
 loss_hist = []
 test_loss_hist = []
 counter = 0
