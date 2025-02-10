@@ -42,8 +42,8 @@ train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-# Define SNNwork
-class SNN(nn.Module):
+# Define SharedBiasSNNwork
+class SharedBiasSNN(nn.Module):
     def __init__(self, beta=0.95):
         
         super().__init__()
@@ -55,6 +55,7 @@ class SNN(nn.Module):
         self.lif2 = snn.Leaky(beta=beta)
         self.fc3 = nn.Linear(1024, 10)
         self.lif3 = snn.Leaky(beta=beta)
+        self.global_bias = nn.Parameter(torch.zeros(1))
         
         # Xavier initialization
         nn.init.xavier_uniform_(self.fc1.weight)
@@ -75,13 +76,13 @@ class SNN(nn.Module):
         mem3_rec = []
 
         for step in range(num_steps):
-            cur1 = self.fc1(x)
+            cur1 = self.fc1(x) + self.global_bias
             spk1, mem1 = self.lif1(cur1, mem1)
             spk1 = spk1.to(dtype=torch.float64)
-            cur2 = self.fc2(spk1)
+            cur2 = self.fc2(spk1) + self.global_bias
             spk2, mem2 = self.lif2(cur2, mem2)
             spk2 = spk2.to(dtype=torch.float64)
-            cur3 = self.fc3(spk2)
+            cur3 = self.fc3(spk2) + self.global_bias
             spk3, mem3 = self.lif3(cur3, mem3)
             spk3 = spk3.to(dtype=torch.float64)
             spk3_rec.append(spk3)
@@ -90,7 +91,7 @@ class SNN(nn.Module):
         return torch.stack(spk3_rec, dim=0), torch.stack(mem3_rec, dim=0)
 
 # Load the network onto CUDA if available
-net = SNN().to(device)
+net = SharedBiasSNN().to(device)
 
 # loss and optimizer
 loss = nn.CrossEntropyLoss()

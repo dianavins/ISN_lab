@@ -16,3 +16,5 @@ activation function.
 Train the network in the usual manner and using categorical crossentropy loss, Adam optimizer, Xavier initialization, 
 learning rate 0.001. Feel free to try different things and/or suggest alternatives that you think might work better. 
 Report training accuracy, training loss, validation accuracy and validation loss
+
+Also make an ANN version of this and another ANN & SNN with shared bias terms across all neurons
